@@ -1,0 +1,2 @@
+/usr/bin/ar qc libtch.a CMakeFiles/tch.dir/torch_api.cpp.o CMakeFiles/tch.dir/torch_api_generated.cpp.o
+/usr/bin/ranlib libtch.a

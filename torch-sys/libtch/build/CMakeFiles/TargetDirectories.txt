@@ -1,0 +1,7 @@
+/home/vs/Projects/ml/mytch/tch-rs/torch-sys/libtch/build/CMakeFiles/tch.dir
+/home/vs/Projects/ml/mytch/tch-rs/torch-sys/libtch/build/CMakeFiles/edit_cache.dir
+/home/vs/Projects/ml/mytch/tch-rs/torch-sys/libtch/build/CMakeFiles/rebuild_cache.dir
+/home/vs/Projects/ml/mytch/tch-rs/torch-sys/libtch/build/CMakeFiles/list_install_components.dir
+/home/vs/Projects/ml/mytch/tch-rs/torch-sys/libtch/build/CMakeFiles/install.dir
+/home/vs/Projects/ml/mytch/tch-rs/torch-sys/libtch/build/CMakeFiles/install/local.dir
+/home/vs/Projects/ml/mytch/tch-rs/torch-sys/libtch/build/CMakeFiles/install/strip.dir

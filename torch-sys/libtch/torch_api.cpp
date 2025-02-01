@@ -1661,3 +1661,12 @@ void ati_free(ivalue i) {
 void at_set_graph_executor_optimize(bool o) {
   torch::jit::setGraphExecutorOptimize(o);
 }
+
+// Не добавлять, когда сборка происходит из Rust
+// bool tch_write_stream_destructor(void*) { return true; }
+// bool tch_write_stream_write(void*, const uint8_t*, size_t, size_t*) { return true; }
+// bool tch_read_stream_destructor(void*) { return true; }
+// bool tch_read_stream_stream_position(void*, uint64_t*) { return true; }
+// bool tch_read_stream_seek_start(void*, uint64_t, uint64_t*) { return true; }
+// bool tch_read_stream_seek_end(void*, int64_t, uint64_t*) { return true; }
+// bool tch_read_stream_read(void*, uint8_t*, size_t, size_t*) { return true; }

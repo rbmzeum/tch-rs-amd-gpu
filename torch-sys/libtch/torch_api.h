@@ -28,6 +28,12 @@ typedef void *module;
 typedef void *ivalue;
 #endif
 
+#ifdef TCH_EXTERN_SYMBOLS
+#define TCH_EXPORT __attribute__((visibility("default")))
+#else
+#define TCH_EXPORT
+#endif
+
 char *get_and_reset_last_err(); // thread-local
 void at_manual_seed(int64_t);
 tensor at_new_tensor();
@@ -283,6 +289,15 @@ bool tch_read_stream_stream_position(void *stream_ptr, uint64_t *pos);
 bool tch_read_stream_seek_start(void *stream_ptr, uint64_t pos, uint64_t *new_pos);
 bool tch_read_stream_seek_end(void *stream_ptr, int64_t pos, uint64_t *new_pos);
 bool tch_read_stream_read(void *stream_ptr, uint8_t *buf, size_t size, size_t *new_pos);
+
+TCH_EXPORT void *tch_write_stream_new(void);
+// TCH_EXPORT void tch_write_stream_destructor(void *);
+TCH_EXPORT bool tch_write_stream_write(void *stream_ptr, const uint8_t *buf, size_t size, size_t *out_size);
+TCH_EXPORT bool tch_read_stream_destructor(void *stream_ptr);
+TCH_EXPORT bool tch_read_stream_stream_position(void *stream_ptr, uint64_t *pos);
+TCH_EXPORT bool tch_read_stream_seek_start(void *stream_ptr, uint64_t pos, uint64_t *new_pos);
+TCH_EXPORT bool tch_read_stream_seek_end(void *stream_ptr, int64_t pos, uint64_t *new_pos);
+TCH_EXPORT bool tch_read_stream_read(void *stream_ptr, uint8_t *buf, size_t size, size_t *new_pos);
 
 #ifdef __cplusplus
 };

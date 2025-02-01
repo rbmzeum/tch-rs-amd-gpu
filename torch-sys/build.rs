@@ -267,7 +267,22 @@ impl SystemInfo {
 
     fn check_system_location(os: Os) -> Option<PathBuf> {
         match os {
-            Os::Linux => Path::new("/usr/lib/libtorch.so").exists().then(|| PathBuf::from("/usr")),
+            Os::Linux => {
+                // Проверяем наличие основных библиотек
+                let base_exists = Path::new("/usr/lib/libtorch.so").exists();
+                let cuda_exists = Path::new("/usr/lib/libtorch_cuda.so").exists() 
+                             || Path::new("/usr/lib/libtorch_hip.so").exists();
+                
+                if base_exists && cuda_exists {
+                    println!("cargo:warning=Found system libtorch with CUDA/ROCm support");
+                    Some(PathBuf::from("/usr"))
+                } else if base_exists {
+                    println!("cargo:warning=Found system libtorch (CPU only)");
+                    Some(PathBuf::from("/usr"))
+                } else {
+                    None
+                }
+            },
             _ => None,
         }
     }
@@ -352,6 +367,42 @@ impl SystemInfo {
     }
 
     fn make(&self) {
+        // Добавляем все необходимые пути для поиска библиотек
+        let manifest_dir = env::var("CARGO_MANIFEST_DIR")
+            .expect("Failed to get manifest directory");
+        
+        // Путь к локальному libtch.a
+        let libtch_path = Path::new(&manifest_dir).join("libtch");
+        println!("cargo:rustc-link-search=native={}", libtch_path.display());
+        
+        // Путь к системным библиотекам libtorch
+        if let Ok(libtorch_path) = env::var("LIBTORCH") {
+            println!("cargo:rustc-link-search=native={}/lib", libtorch_path);
+        }
+        
+        // Добавляем стандартные пути поиска для Linux
+        if cfg!(target_os = "linux") {
+            println!("cargo:rustc-link-search=native=/usr/lib");
+            println!("cargo:rustc-link-search=native=/usr/local/lib");
+        }
+
+        // Указываем rpath для динамических библиотек
+        if cfg!(target_os = "linux") || cfg!(target_os = "macos") {
+            if let Ok(libtorch_path) = env::var("LIBTORCH") {
+                println!("cargo:rustc-link-arg=-Wl,-rpath,{}/lib", libtorch_path);
+            }
+            println!("cargo:rustc-link-arg=-Wl,-rpath,/usr/lib");
+            println!("cargo:rustc-link-arg=-Wl,-rpath,/usr/local/lib");
+        }
+
+        // Линкуем с нашей статической библиотекой
+        println!("cargo:rustc-link-lib=static=tch");
+
+        // Линкуем с C++ стандартной библиотекой и другими необходимыми библиотеками
+        println!("cargo:rustc-link-lib=dylib=stdc++");
+        println!("cargo:rustc-link-lib=dylib=m");
+
+        // Отслеживаем изменения файлов
         println!("cargo:rerun-if-changed=libtch/torch_python.cpp");
         println!("cargo:rerun-if-changed=libtch/torch_python.h");
         println!("cargo:rerun-if-changed=libtch/torch_api_generated.cpp");
@@ -361,51 +412,13 @@ impl SystemInfo {
         println!("cargo:rerun-if-changed=libtch/stb_image_write.h");
         println!("cargo:rerun-if-changed=libtch/stb_image_resize.h");
         println!("cargo:rerun-if-changed=libtch/stb_image.h");
-        let mut c_files = vec!["libtch/torch_api.cpp", "libtch/torch_api_generated.cpp"];
-        if cfg!(feature = "python-extension") {
-            c_files.push("libtch/torch_python.cpp")
-        }
-
-        match self.os {
-            Os::Linux | Os::Macos => {
-                // Pass the libtorch lib dir to crates that use torch-sys. This will be available
-                // as DEP_TORCH_SYS_LIBTORCH_LIB, see:
-                // https://doc.rust-lang.org/cargo/reference/build-scripts.html#the-links-manifest-key
-                println!("cargo:libtorch_lib={}", self.libtorch_lib_dir.display());
-                cc::Build::new()
-                    .cpp(true)
-                    .pic(true)
-                    .warnings(false)
-                    .includes(&self.libtorch_include_dirs)
-                    .flag(format!("-Wl,-rpath={}", self.libtorch_lib_dir.display()))
-                    .flag("-std=c++17")
-                    .flag(format!("-D_GLIBCXX_USE_CXX11_ABI={}", self.cxx11_abi))
-                    .flag("-DGLOG_USE_GLOG_EXPORT")
-                    .files(&c_files)
-                    .compile("tch");
-            }
-            Os::Windows => {
-                // TODO: Pass "/link" "LIBPATH:{}" to cl.exe in order to emulate rpath.
-                //       Not yet supported by cc=rs.
-                //       https://github.com/alexcrichton/cc-rs/issues/323
-                cc::Build::new()
-                    .cpp(true)
-                    .pic(true)
-                    .warnings(false)
-                    .includes(&self.libtorch_include_dirs)
-                    .flag("/std:c++17")
-                    .flag("/p:DefineConstants=GLOG_USE_GLOG_EXPORT")
-                    .files(&c_files)
-                    .compile("tch");
-            }
-        };
     }
 
     fn link(&self, lib_name: &str) {
         match self.link_type {
             LinkType::Dynamic => println!("cargo:rustc-link-lib={lib_name}"),
             LinkType::Static => {
-                // TODO: whole-archive might only be necessary for libtorch_cpu?
+                // Для libtorch используем статическую линковку
                 println!("cargo:rustc-link-lib=static:+whole-archive,-bundle={lib_name}")
             }
         }
@@ -415,92 +428,73 @@ impl SystemInfo {
 fn main() -> anyhow::Result<()> {
     if !cfg!(feature = "doc-only") {
         let system_info = SystemInfo::new()?;
-        // use_cuda is a hacky way to detect whether cuda is available and
-        // if it's the case link to it by explicitly depending on a symbol
-        // from the torch_cuda library.
-        // It would be better to use -Wl,--no-as-needed but there is no way
-        // to specify arbitrary linker flags at the moment.
-        //
-        // Once https://github.com/rust-lang/cargo/pull/8441 is available
-        // we should switch to using rustc-link-arg instead e.g. with the
-        // following flags:
-        //   -Wl,--no-as-needed -Wl,--copy-dt-needed-entries -ltorch
-        //
-        // This will be available starting from cargo 1.50 but will be a nightly
-        // only option to start with.
-        // https://github.com/rust-lang/cargo/blob/master/CHANGELOG.md
-        //
-        // Update: The above doesn't seem to propagate to the downstream binaries
-        // so doesn't really help, the comment has been kept though to keep track
-        // if this issue.
-        // TODO: Try out the as-needed native link modifier when it lands.
-        // https://github.com/rust-lang/rust/issues/99424
-        //
-        // Update: it seems that the dummy dependency is not necessary anymore, so just
-        // removing it and keeping this comment around for legacy.
         let si_lib = &system_info.libtorch_lib_dir;
-        let use_cuda =
-            si_lib.join("libtorch_cuda.so").exists() || si_lib.join("torch_cuda.dll").exists();
-        let use_cuda_cu = si_lib.join("libtorch_cuda_cu.so").exists()
-            || si_lib.join("torch_cuda_cu.dll").exists();
-        let use_cuda_cpp = si_lib.join("libtorch_cuda_cpp.so").exists()
-            || si_lib.join("torch_cuda_cpp.dll").exists();
-        let use_hip =
-            si_lib.join("libtorch_hip.so").exists() || si_lib.join("torch_hip.dll").exists();
+        
+        // Собираем libtch
+        let manifest_dir = env::var("CARGO_MANIFEST_DIR").unwrap();
+        let libtch_path = Path::new(&manifest_dir).join("libtch");
+        
+        // Запускаем сборку libtch
+        let status = std::process::Command::new("bash")
+            .current_dir(&libtch_path)
+            .arg("build.sh")
+            .status()?;
+            
+        if !status.success() {
+            anyhow::bail!("Failed to build libtch");
+        }
+
+        // Проверяем наличие CUDA/ROCm библиотек
+        let use_cuda = si_lib.join("libtorch_cuda.so").exists() || si_lib.join("torch_cuda.dll").exists();
+        let use_cuda_cu = si_lib.join("libtorch_cuda_cu.so").exists() || si_lib.join("torch_cuda_cu.dll").exists();
+        let use_cuda_cpp = si_lib.join("libtorch_cuda_cpp.so").exists() || si_lib.join("torch_cuda_cpp.dll").exists();
+        let use_hip = si_lib.join("libtorch_hip.so").exists() || si_lib.join("torch_hip.dll").exists();
+        
         println!("cargo:rustc-link-search=native={}", si_lib.display());
+        println!("cargo:rustc-link-search=native={}", libtch_path.display());
 
-        system_info.make();
-
+        // Сначала линкуем нашу статическую библиотеку
         println!("cargo:rustc-link-lib=static=tch");
-        if use_cuda {
-            system_info.link("torch_cuda")
-        }
-        if use_cuda_cu {
-            system_info.link("torch_cuda_cu")
-        }
-        if use_cuda_cpp {
-            system_info.link("torch_cuda_cpp")
-        }
-        if use_hip {
-            system_info.link("torch_hip")
-        }
-        if cfg!(feature = "python-extension") {
-            system_info.link("torch_python")
-        }
+
+        // Затем линкуем системные библиотеки
         if system_info.link_type == LinkType::Static {
-            // TODO: this has only be tried out on the cpu version. Check that it works
-            // with cuda too and maybe just try linking all available files?
-            system_info.link("asmjit");
-            system_info.link("clog");
-            system_info.link("cpuinfo");
-            system_info.link("dnnl");
-            system_info.link("dnnl_graph");
-            system_info.link("fbgemm");
-            system_info.link("gloo");
-            system_info.link("kineto");
-            system_info.link("nnpack");
-            system_info.link("onnx");
-            system_info.link("onnx_proto");
-            system_info.link("protobuf");
-            system_info.link("pthreadpool");
-            system_info.link("pytorch_qnnpack");
-            system_info.link("sleef");
-            system_info.link("tensorpipe");
-            system_info.link("tensorpipe_uv");
-            system_info.link("XNNPACK");
+            system_info.link("torch_cpu");
+            system_info.link("c10");
+            if use_hip {
+                system_info.link("c10_hip");
+            }
+        } else {
+            if use_cuda {
+                system_info.link("torch_cuda");
+            }
+            if use_cuda_cu {
+                system_info.link("torch_cuda_cu");
+            }
+            if use_cuda_cpp {
+                system_info.link("torch_cuda_cpp");
+            }
+            if use_hip {
+                system_info.link("torch_hip");
+                system_info.link("c10_hip");
+            }
+            system_info.link("torch");
+            system_info.link("torch_cpu");
+            system_info.link("c10");
         }
-        system_info.link("torch_cpu");
-        system_info.link("torch");
-        system_info.link("c10");
-        if use_hip {
-            system_info.link("c10_hip");
-        }
+
+        // Линкуем с C++ стандартной библиотекой
+        println!("cargo:rustc-link-lib=dylib=stdc++");
 
         let target = env::var("TARGET").context("TARGET variable not set")?;
-
         if !target.contains("msvc") && !target.contains("apple") {
             println!("cargo:rustc-link-lib=gomp");
         }
+
+        // Отслеживаем изменения
+        println!("cargo:rerun-if-changed=libtch/torch_api.cpp");
+        println!("cargo:rerun-if-changed=libtch/torch_api.h");
+        println!("cargo:rerun-if-changed=libtch/torch_api_generated.cpp");
+        println!("cargo:rerun-if-changed=libtch/torch_api_generated.h");
     }
     Ok(())
 }
